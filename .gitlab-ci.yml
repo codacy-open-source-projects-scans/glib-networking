@@ -1,7 +1,7 @@
 include:
  - project: 'Infrastructure/freedesktop-ci-templates'
    file: 'templates/fedora.yml'
-   ref: 'c5626190ec14b475271288dda7a7dae8dbe0cd76'
+   ref: '5cc6ded703fc990f9d055f0d948ffd4460a9ca40'
  - component: gitlab.gnome.org/GNOME/citemplates/release-service@master
    inputs:
      dist-job-name: "fedora-x86_64-dist"
@@ -18,7 +18,7 @@ stages:
 
 .fedora.container.common:
   variables:
-    FDO_DISTRIBUTION_TAG: '2022-08-05.3'
+    FDO_DISTRIBUTION_TAG: '2026-02-23.0'
     FDO_DISTRIBUTION_VERSION: 'latest'
 
 build.container.fedora@x86_64:
@@ -38,11 +38,11 @@ build.container.fedora@x86_64:
       lcov
       libasan
       meson
-      pkgconfig(gnutls)
-      pkgconfig(gsettings-desktop-schemas)
-      pkgconfig(libproxy-1.0)
-      pkgconfig(openssl)
-      pkgconfig(p11-kit-1)
+      'pkgconfig(gnutls)'
+      'pkgconfig(gsettings-desktop-schemas)'
+      'pkgconfig(libproxy-1.0)'
+      'pkgconfig(openssl)'
+      'pkgconfig(p11-kit-1)'
     FDO_DISTRIBUTION_EXEC: >-
       git clone --depth=1 https://gitlab.gnome.org/GNOME/glib.git &&
       pushd glib &&
@@ -85,6 +85,8 @@ fedora-x86_64:
     when: always
   coverage: '/^\s+lines\.+:\s+([\d.]+\%)\s+/'
 
+# FIXME: This uses -Dlibproxy=disabled due to leaks in libproxy:
+#   https://github.com/libproxy/libproxy/pull/357
 fedora-x86_64-asan:
   extends:
     - '.fdo.distribution-image@fedora'
@@ -98,7 +100,7 @@ fedora-x86_64-asan:
     - meson -Db_sanitize=address
             -Dgnutls=enabled
             -Dopenssl=enabled
-            -Dlibproxy=enabled
+            -Dlibproxy=disabled
             -Denvironment_proxy=enabled
             -Dgnome_proxy=enabled
             -Ddebug_logs=true

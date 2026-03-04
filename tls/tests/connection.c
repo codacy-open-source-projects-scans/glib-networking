@@ -269,6 +269,7 @@ on_server_close_finish (GObject        *object,
   g_io_stream_close_finish (G_IO_STREAM (object), res, &error);
   // FIXME: https://gitlab.gnome.org/GNOME/glib-networking/issues/105
   // g_assert_no_error (error);
+  g_clear_error (&error);
 
   test->server_running = FALSE;
 }
@@ -506,6 +507,8 @@ on_client_connection_close_finish (GObject        *object,
    */
   if (!test->ignore_client_close_error)
     g_assert_no_error (error);
+  else
+    g_clear_error (&error);
 
   g_main_loop_quit (test->loop);
 }
@@ -1207,10 +1210,6 @@ test_invalid_chain_with_alternative_ca_cert (TestConnection *test,
 
   g_tls_connection_set_database (G_TLS_CONNECTION (test->client_connection), test->database);
 
-  /* Make sure this test doesn't expire. */
-  g_tls_client_connection_set_validation_flags (G_TLS_CLIENT_CONNECTION (test->client_connection),
-                                                G_TLS_CERTIFICATE_VALIDATE_ALL & ~G_TLS_CERTIFICATE_EXPIRED);
-
   read_test_data_async (test);
   g_main_loop_run (test->loop);
   wait_until_server_finished (test);
@@ -1604,6 +1603,8 @@ test_client_auth_fail_missing_client_private_key (TestConnection *test,
 #else
   g_assert_error (test->server_error, G_TLS_ERROR, G_TLS_ERROR_NOT_TLS);
 #endif
+
+  g_object_unref (cert);
 }
 
 static void
@@ -3219,9 +3220,11 @@ main (int   argc,
       char *argv[])
 {
   int ret;
-#ifdef BACKEND_IS_GNUTLS
+#if defined(BACKEND_IS_GNUTLS) && HAVE_GNUTLS_PKCS11
   char *module_path;
+#ifndef __SANITIZE_ADDRESS__
   const char *spy_path;
+#endif
 #endif
 
   g_test_init (&argc, &argv, NULL);
@@ -3236,7 +3239,13 @@ main (int   argc,
   module_path = g_test_build_filename (G_TEST_BUILT, "mock-pkcs11.so", NULL);
   g_assert_true (g_file_test (module_path, G_FILE_TEST_EXISTS));
 
-  /* This just adds extra logging which is useful for debugging */
+#ifndef __SANITIZE_ADDRESS__
+  /* Since OpenSC 0.27, pkcs11-spy uses RTLD_DEEPBIND and so cannot be used with
+   * asan.
+   *
+   * https://github.com/google/sanitizers/issues/611
+   * https://github.com/OpenSC/OpenSC/pull/3487
+   */
   spy_path = g_getenv ("PKCS11SPY_PATH");
   if (!spy_path)
     {
@@ -3252,6 +3261,7 @@ main (int   argc,
       g_free (module_path);
       module_path = g_strdup (spy_path);
     }
+#endif
 
   ret = gnutls_pkcs11_init (GNUTLS_PKCS11_FLAG_MANUAL, NULL);
   g_assert_cmpint (ret, ==, GNUTLS_E_SUCCESS);
