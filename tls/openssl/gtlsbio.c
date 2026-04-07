@@ -297,32 +297,31 @@ gtls_bio_gets(BIO  *bio,
 }
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L || defined (LIBRESSL_VERSION_NUMBER)
-static BIO_METHOD methods_gtls = {
-  BIO_TYPE_SOURCE_SINK,
-  "gtls",
-  gtls_bio_write,
-  gtls_bio_read,
-  gtls_bio_puts,
-  gtls_bio_gets,
-  gtls_bio_ctrl,
-  gtls_bio_create,
-  gtls_bio_destroy
-};
-#else
-static BIO_METHOD *methods_gtls = NULL;
-#endif
-
-#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined (LIBRESSL_VERSION_NUMBER)
 static BIO_METHOD *
 BIO_s_gtls (void)
 {
+  static BIO_METHOD methods_gtls = {
+    BIO_TYPE_SOURCE_SINK,
+    "gtls",
+    gtls_bio_write,
+    gtls_bio_read,
+    gtls_bio_puts,
+    gtls_bio_gets,
+    gtls_bio_ctrl,
+    gtls_bio_create,
+    gtls_bio_destroy
+  };
+
   return &methods_gtls;
 }
 #else
 static const BIO_METHOD *
 BIO_s_gtls (void)
 {
-  if (!methods_gtls)
+  static BIO_METHOD *methods_gtls = NULL;
+  static gsize once = 0;
+
+  if (g_once_init_enter (&once))
     {
       methods_gtls = BIO_meth_new (BIO_TYPE_SOURCE_SINK | BIO_get_new_index (), "gtls");
       if (!methods_gtls ||
@@ -333,7 +332,9 @@ BIO_s_gtls (void)
           !BIO_meth_set_ctrl (methods_gtls, gtls_bio_ctrl) ||
           !BIO_meth_set_create (methods_gtls, gtls_bio_create) ||
           !BIO_meth_set_destroy (methods_gtls, gtls_bio_destroy))
-        return NULL;
+        g_clear_pointer (&methods_gtls, BIO_meth_free);
+
+      g_once_init_leave (&once, 1);
     }
   return methods_gtls;
 }
@@ -345,7 +346,7 @@ g_tls_bio_alloc (GTlsBio **out_gbio)
   BIO *ret;
   GTlsBio *gbio;
 
-  ret = BIO_new(BIO_s_gtls ());
+  ret = BIO_new (BIO_s_gtls ());
   if (!ret)
     return NULL;
 

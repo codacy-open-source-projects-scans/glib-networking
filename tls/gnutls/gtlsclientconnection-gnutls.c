@@ -118,7 +118,7 @@ g_tls_client_connection_gnutls_init (GTlsClientConnectionGnutls *gnutls)
 }
 
 static const gchar *
-get_server_identity (GTlsClientConnectionGnutls *gnutls)
+get_server_hostname (GTlsClientConnectionGnutls *gnutls)
 {
   if (G_IS_NETWORK_ADDRESS (gnutls->server_identity))
     return g_network_address_get_hostname (G_NETWORK_ADDRESS (gnutls->server_identity));
@@ -126,6 +126,31 @@ get_server_identity (GTlsClientConnectionGnutls *gnutls)
     return g_network_service_get_domain (G_NETWORK_SERVICE (gnutls->server_identity));
   else
     return NULL;
+}
+
+static void
+set_server_name_if_available (GTlsClientConnectionGnutls *gnutls)
+{
+  gnutls_session_t session;
+  const gchar *hostname;
+
+  session = g_tls_connection_gnutls_get_session (G_TLS_CONNECTION_GNUTLS (gnutls));
+  if (!session)
+    return;
+
+  hostname = get_server_hostname (gnutls);
+  if (hostname && !g_hostname_is_ip_address (hostname))
+    {
+      gchar *normalized_hostname = g_strdup (hostname);
+
+      if (hostname[strlen (hostname) - 1] == '.')
+        normalized_hostname[strlen (hostname) - 1] = '\0';
+
+      gnutls_server_name_set (session, GNUTLS_NAME_DNS,
+                              normalized_hostname, strlen (normalized_hostname));
+
+      g_free (normalized_hostname);
+    }
 }
 
 static int session_inc_ref (gpointer data)
@@ -189,26 +214,13 @@ g_tls_client_connection_gnutls_initable_init (GInitable       *initable,
 {
   GTlsConnectionGnutls *gnutls = G_TLS_CONNECTION_GNUTLS (initable);
   gnutls_session_t session;
-  const gchar *hostname;
 
   if (!g_tls_client_connection_gnutls_parent_initable_iface->init (initable, cancellable, error))
     return FALSE;
 
+  set_server_name_if_available (G_TLS_CLIENT_CONNECTION_GNUTLS (gnutls));
+
   session = g_tls_connection_gnutls_get_session (gnutls);
-  hostname = get_server_identity (G_TLS_CLIENT_CONNECTION_GNUTLS (gnutls));
-  if (hostname && !g_hostname_is_ip_address (hostname))
-    {
-      gchar *normalized_hostname = g_strdup (hostname);
-
-      if (hostname[strlen (hostname) - 1] == '.')
-        normalized_hostname[strlen (hostname) - 1] = '\0';
-
-      gnutls_server_name_set (session, GNUTLS_NAME_DNS,
-                              normalized_hostname, strlen (normalized_hostname));
-
-      g_free (normalized_hostname);
-    }
-
   gnutls_handshake_set_hook_function (session, GNUTLS_HANDSHAKE_NEW_SESSION_TICKET,
                                       GNUTLS_HOOK_POST, handshake_thread_session_ticket_received_cb);
 
@@ -275,7 +287,6 @@ g_tls_client_connection_gnutls_set_property (GObject      *object,
 {
   GTlsConnectionBase *tls = G_TLS_CONNECTION_BASE (object);
   GTlsClientConnectionGnutls *gnutls = G_TLS_CLIENT_CONNECTION_GNUTLS (object);
-  const char *hostname;
 
   switch (prop_id)
     {
@@ -288,26 +299,9 @@ g_tls_client_connection_gnutls_set_property (GObject      *object,
         g_object_unref (gnutls->server_identity);
       gnutls->server_identity = g_value_dup_object (value);
 
-      hostname = get_server_identity (gnutls);
-      if (hostname && !g_hostname_is_ip_address (hostname))
-        {
-          gnutls_session_t session = g_tls_connection_gnutls_get_session (G_TLS_CONNECTION_GNUTLS (gnutls));
-
-          /* This will only be triggered if the identity is set after
-           * initialization */
-          if (session)
-            {
-              gchar *normalized_hostname = g_strdup (hostname);
-
-              if (hostname[strlen (hostname) - 1] == '.')
-                normalized_hostname[strlen (hostname) - 1] = '\0';
-
-              gnutls_server_name_set (session, GNUTLS_NAME_DNS,
-                                      normalized_hostname, strlen (normalized_hostname));
-
-              g_free (normalized_hostname);
-            }
-        }
+      /* This will do nothing during initialization, but that's OK because we
+       * call it again after initialization. */
+      set_server_name_if_available (gnutls);
       break;
 
     case PROP_USE_SSL3:
