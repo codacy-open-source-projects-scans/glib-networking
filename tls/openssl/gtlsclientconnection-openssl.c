@@ -328,6 +328,7 @@ set_cipher_list (GTlsClientConnectionOpenssl  *client,
   cipher_list = g_getenv ("G_TLS_OPENSSL_CIPHER_LIST");
   if (cipher_list)
     {
+      ERR_clear_error ();
       if (!SSL_CTX_set_cipher_list (client->ssl_ctx, cipher_list))
         {
           char error_buffer[256];
@@ -355,6 +356,7 @@ set_max_protocol (GTlsClientConnectionOpenssl  *client,
 
       if (version > 0 && version < G_MAXINT)
         {
+          ERR_clear_error ();
           if (!SSL_CTX_set_max_proto_version (client->ssl_ctx, (int)version))
             {
               char error_buffer[256];
@@ -422,10 +424,20 @@ g_tls_client_connection_openssl_initable_init (GInitable       *initable,
   const char *hostname;
   char error_buffer[256];
 
+  ERR_clear_error ();
+
   client->session = (SSL_SESSION *)g_tls_lookup_session_data (g_tls_connection_base_get_session_id (G_TLS_CONNECTION_BASE (client)));
   if (!client->session)
     {
       client->session = SSL_SESSION_new ();
+      if (!client->session)
+        {
+          ERR_error_string_n (ERR_get_error (), error_buffer, sizeof (error_buffer));
+          g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_MISC,
+                       _("Could not create TLS session: %s"),
+                       error_buffer);
+          return FALSE;
+        }
     }
   else
     {
@@ -482,6 +494,7 @@ g_tls_client_connection_openssl_initable_init (GInitable       *initable,
   set_signature_algorithm_list (client);
   set_curve_list (client);
 
+  ERR_clear_error ();
   client->ssl = SSL_new (client->ssl_ctx);
   if (!client->ssl)
     {

@@ -173,6 +173,8 @@ ssl_set_certificate (SSL              *ssl,
       return FALSE;
     }
 
+  ERR_clear_error ();
+
   /* Note, order is important. If a certificate has been set previously,
    * OpenSSL requires that the new certificate is set _before_ the new
    * private key is set. */
@@ -198,8 +200,10 @@ ssl_set_certificate (SSL              *ssl,
   if (SSL_clear_chain_certs (ssl) == 0)
     {
       ERR_error_string_n (ERR_get_error (), error_buffer, sizeof (error_buffer));
-      g_warning ("There was a problem clearing the chain certificates: %s",
-                 error_buffer);
+      g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE,
+                   _("There was a problem clearing the chain certificates: %s"),
+                   error_buffer);
+      return FALSE;
     }
 
   /* Add all the issuers to create the full certificate chain */
@@ -217,8 +221,10 @@ ssl_set_certificate (SSL              *ssl,
       if (SSL_add1_chain_cert (ssl, issuer_x) == 0)
         {
           ERR_error_string_n (ERR_get_error (), error_buffer, sizeof (error_buffer));
-          g_warning ("There was a problem adding the chain certificate: %s",
-                     error_buffer);
+          g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE,
+                       _("There was a problem adding the chain certificate: %s"),
+                       error_buffer);
+          return FALSE;
         }
     }
 
@@ -277,6 +283,7 @@ set_cipher_list (GTlsServerConnectionOpenssl  *server,
   cipher_list = g_getenv ("G_TLS_OPENSSL_CIPHER_LIST");
   if (cipher_list)
     {
+      ERR_clear_error ();
       if (!SSL_CTX_set_cipher_list (server->ssl_ctx, cipher_list))
         {
           char error_buffer[256];
@@ -304,6 +311,7 @@ set_max_protocol (GTlsServerConnectionOpenssl  *server,
 
       if (version > 0 && version < G_MAXINT)
         {
+          ERR_clear_error ();
           if (!SSL_CTX_set_max_proto_version (server->ssl_ctx, (int)version))
             {
               char error_buffer[256];
@@ -353,7 +361,17 @@ g_tls_server_connection_openssl_initable_init (GInitable       *initable,
   long options;
   char error_buffer[256];
 
+  ERR_clear_error ();
+
   server->session = SSL_SESSION_new ();
+  if (!server->session)
+    {
+      ERR_error_string_n (ERR_get_error (), error_buffer, sizeof (error_buffer));
+      g_set_error (error, G_TLS_ERROR, G_TLS_ERROR_MISC,
+                   _("Could not create TLS session: %s"),
+                   error_buffer);
+      return FALSE;
+    }
 
   server->ssl_ctx = SSL_CTX_new (g_tls_connection_base_is_dtls (G_TLS_CONNECTION_BASE (server))
                                  ? DTLS_server_method ()
@@ -391,6 +409,7 @@ g_tls_server_connection_openssl_initable_init (GInitable       *initable,
 
   cert = g_tls_connection_get_certificate (G_TLS_CONNECTION (initable));
 
+  ERR_clear_error ();
   server->ssl = SSL_new (server->ssl_ctx);
   if (!server->ssl)
     {

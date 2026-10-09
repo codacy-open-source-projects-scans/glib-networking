@@ -1920,7 +1920,7 @@ g_tls_connection_base_handshake_async (GTlsConnection      *conn,
 
   thread_task = g_task_new (conn, cancellable, async_handshake_thread_completed, caller_task);
   g_task_set_source_tag (thread_task, g_tls_connection_base_handshake_async);
-  g_task_set_name (caller_task, "[glib-networking] g_tls_connection_base_handshake_async (thread task)");
+  g_task_set_name (thread_task, "[glib-networking] g_tls_connection_base_handshake_async (thread task)");
   g_task_set_priority (thread_task, io_priority);
 
   timeout = g_new0 (gint64, 1);
@@ -2285,7 +2285,7 @@ g_tls_connection_base_write_message (GTlsConnectionBase  *tls,
                  timeout, cancellable, error))
     return -1;
 
-  g_assert (G_TLS_CONNECTION_BASE_GET_CLASS (tls)->read_message_fn);
+  g_assert (G_TLS_CONNECTION_BASE_GET_CLASS (tls)->write_message_fn);
   status = G_TLS_CONNECTION_BASE_GET_CLASS (tls)->
     write_message_fn (tls, vectors, num_vectors, timeout, &nwrote, cancellable, error);
 
@@ -2876,7 +2876,7 @@ g_tls_connection_base_constructed (GObject *object)
                 }
               g_free (cert_hash);
             }
-          g_object_unref (remote_addr);
+          g_clear_object (&remote_addr);
         }
       g_object_unref (base_conn);
     }
