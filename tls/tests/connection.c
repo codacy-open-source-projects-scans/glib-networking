@@ -257,6 +257,9 @@ on_accept_certificate (GTlsConnection       *conn,
 static void on_output_write_finish (GObject        *object,
                                     GAsyncResult   *res,
                                     gpointer        user_data);
+static void handshake_failed_cb (GObject      *source,
+                                 GAsyncResult *result,
+                                 gpointer      user_data);
 
 static void
 on_server_close_finish (GObject        *object,
@@ -683,6 +686,85 @@ test_connection_session_resume_ten_minute_expiry (TestConnection *test,
 }
 
 static void
+test_connection_session_no_resume_after_certificate_clear (TestConnection *test,
+                                                           gconstpointer   data)
+{
+  GIOStream *connection;
+  GError *error = NULL;
+  GTlsCertificate *cert;
+  GSocketClient *client;
+  gboolean reused = FALSE;
+
+  test->database = g_tls_file_database_new (tls_test_file_path ("ca-roots.pem"), &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (test->database);
+
+  /*
+   * Establish a session authenticated with a client certificate.
+   */
+  connection = start_async_server_and_connect_to_it (test, G_TLS_AUTHENTICATION_REQUESTED);
+  test->client_connection = g_tls_client_connection_new (connection, test->identity, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (test->client_connection);
+  g_object_set (test->client_connection, "session-resumption-enabled", TRUE, NULL);
+  g_object_unref (connection);
+
+  cert = g_tls_certificate_new_from_file (tls_test_file_path ("client-and-key.pem"), &error);
+  g_assert_no_error (error);
+
+  g_tls_connection_set_certificate (G_TLS_CONNECTION (test->client_connection), cert);
+  g_tls_connection_set_database (G_TLS_CONNECTION (test->client_connection), test->database);
+
+  read_test_data_async (test);
+  g_main_loop_run (test->loop);
+  wait_until_server_finished (test);
+
+  g_assert_no_error (test->read_error);
+  g_assert_no_error (test->server_error);
+
+  g_object_unref (test->client_connection);
+  g_clear_object (&test->server_connection);
+
+  /*
+   * Connect to the same server again. Set the same certificate first,
+   * then clear it before the handshake. The session associated with the
+   * certificate must not be resumed after the certificate is removed.
+   */
+  client = g_socket_client_new ();
+  connection = G_IO_STREAM (g_socket_client_connect (client,
+                                                     G_SOCKET_CONNECTABLE (test->address),
+                                                     NULL,
+                                                     &error));
+  g_assert_no_error (error);
+  g_object_unref (client);
+
+  test->client_connection = g_tls_client_connection_new (connection, test->identity, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (test->client_connection);
+  g_object_set (test->client_connection, "session-resumption-enabled", TRUE, NULL);
+  g_object_unref (connection);
+
+  g_tls_connection_set_certificate (G_TLS_CONNECTION (test->client_connection), cert);
+  g_object_set (test->client_connection, "certificate", NULL, NULL);
+  g_tls_connection_set_database (G_TLS_CONNECTION (test->client_connection), test->database);
+
+  read_test_data_async (test);
+  g_main_loop_run (test->loop);
+  wait_until_server_finished (test);
+
+  g_assert_no_error (test->read_error);
+  g_assert_no_error (test->server_error);
+
+  g_object_get (G_OBJECT (test->client_connection),
+                "session-reused", &reused,
+                NULL);
+
+  g_assert_false (reused);
+
+  g_object_unref (cert);
+}
+
+static void
 test_connection_session_resume_multiple_times (TestConnection *test,
                                               gconstpointer   data)
 {
@@ -854,6 +936,60 @@ test_verified_connection (TestConnection *test,
 
   g_assert_no_error (test->read_error);
   g_assert_no_error (test->server_error);
+}
+
+static void
+test_invalid_server_certificate_purpose (TestConnection *test,
+                                         gconstpointer   data)
+{
+  GTlsBackend *backend;
+  GIOStream *connection;
+  gchar *cert_data = NULL;
+  gchar *key_data = NULL;
+  GError *error = NULL;
+
+  backend = g_tls_backend_get_default ();
+
+  g_file_get_contents (tls_test_file_path ("server-with-invalid-purpose.pem"),
+                       &cert_data, NULL, &error);
+  g_assert_no_error (error);
+
+  g_file_get_contents (tls_test_file_path ("server-key.pem"),
+                       &key_data, NULL, &error);
+  g_assert_no_error (error);
+
+  test->server_certificate = g_initable_new (g_tls_backend_get_certificate_type (backend),
+                                             NULL, &error,
+                                             "certificate-pem", cert_data,
+                                             "private-key-pem", key_data,
+                                             NULL);
+  g_assert_no_error (error);
+
+  g_free (cert_data);
+  g_free (key_data);
+
+  test->database = g_tls_file_database_new (tls_test_file_path ("ca.pem"), &error);
+  g_assert_no_error (error);
+
+  connection = start_async_server_and_connect_to_it (test, G_TLS_AUTHENTICATION_NONE);
+  test->client_connection = g_tls_client_connection_new (connection, test->identity, &error);
+  g_assert_no_error (error);
+  g_object_unref (connection);
+
+  g_tls_connection_set_database (G_TLS_CONNECTION (test->client_connection), test->database);
+  g_tls_client_connection_set_validation_flags (G_TLS_CLIENT_CONNECTION (test->client_connection),
+                                                G_TLS_CERTIFICATE_VALIDATE_ALL);
+
+  g_tls_connection_handshake_async (G_TLS_CONNECTION (test->client_connection),
+                                    G_PRIORITY_DEFAULT, NULL,
+                                    handshake_failed_cb, test);
+  g_main_loop_run (test->loop);
+
+  read_test_data_async (test);
+  g_main_loop_run (test->loop);
+  wait_until_server_finished (test);
+
+  g_assert_error (test->read_error, G_TLS_ERROR, G_TLS_ERROR_BAD_CERTIFICATE);
 }
 
 static void
@@ -3376,12 +3512,16 @@ main (int   argc,
 
   g_test_add ("/tls/" BACKEND "/connection/session/resume_multiple_times", TestConnection, NULL,
               setup_session_connection, test_connection_session_resume_multiple_times, teardown_connection);
+  g_test_add ("/tls/" BACKEND "/connection/session/no-resume-after-certificate-clear", TestConnection, NULL,
+              setup_session_connection, test_connection_session_no_resume_after_certificate_clear, teardown_connection);
   g_test_add ("/tls/" BACKEND "/connection/session/reuse_ten_minute_expiry", TestConnection, NULL,
               setup_session_connection, test_connection_session_resume_ten_minute_expiry, teardown_connection);
   g_test_add ("/tls/" BACKEND "/connection/basic", TestConnection, NULL,
               setup_connection, test_basic_connection, teardown_connection);
   g_test_add ("/tls/" BACKEND "/connection/verified", TestConnection, NULL,
               setup_connection, test_verified_connection, teardown_connection);
+  g_test_add ("/tls/" BACKEND "/connection/invalid-server-certificate-purpose", TestConnection, NULL,
+              setup_connection, test_invalid_server_certificate_purpose, teardown_connection);
   g_test_add ("/tls/" BACKEND "/connection/verified-chain", TestConnection, NULL,
               setup_connection, test_verified_chain, teardown_connection);
   g_test_add ("/tls/" BACKEND "/connection/verified-chain-with-redundant-root-cert", TestConnection, NULL,
